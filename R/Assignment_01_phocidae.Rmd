@@ -1,0 +1,165 @@
+---
+title: "Assignment_1_6210: Are endangered/vulnerable species in the Phocidae family well-represented in BOLD?"
+author: "Eva Burguete-Innocente"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+The following code analyses data from Barcode of Life Database (BOLD) and International Union for Conservation of Nature (IUCN) in order to answer the question: Are endangered/vulnerable species in the Phocidae family well-represented in BOLD?  
+
+Load required packages.
+
+```{r}
+library(tidyverse)
+library(report) # use this to visualise results of ANOVA
+```
+
+Load necessary data.
+
+"phocidae_BOLD_data.csv" is a .csv file of BOLD data for the Phocidae family, downloaded from https://bench.boldsystems.org/index.php/Taxbrowser_Taxonpage?taxon=phocidae&searchTax=Search+Taxonomy and saved as a .csv. This data was retrieved on September 23rd 2025. 
+
+"assessments.csv"  is a .csv file of the IUCN Red List category of species in the phocidae family downloaded from IUCN: https://www.iucnredlist.org/search?dl=true&permalink=55f80735-ab76-4332-beef-b0a0b4ebc378. This data was retrieved on September 23rd, 2025. 
+
+Reading in data and briefly inspecting.
+
+```{r}
+df_phoc <- read.csv("../data/phocidae_BOLD_data.csv")
+
+head(df_phoc)
+tail(df_phoc)
+dim(df_phoc)
+
+df_iucn <- read.csv("../data/assessments.csv")
+
+head(df_iucn)
+tail(df_iucn)
+dim(df_iucn)
+```
+
+Rows in the dataset (specimens) which have no BIN have blank spaces in the column. I added "no_bin" to these, and selected only relevant columns from the dataset for further analysis.
+
+```{r}
+df_phoc$bin_uri[df_phoc$bin_uri == ""] <- "no_bin"
+
+df_phoc_simple <- df_phoc %>%
+  select(bin_uri, specimenid, species) # retain species column for graph labelling purposes
+
+head(df_phoc_simple) # check if it worked
+```
+
+Determining how many unique BINs and species there are, and comparing them out of curiosity to see whether there are discrepancies. There are 18 BINs and 20 species.
+
+```{r}
+df_phoc_simple %>%
+  group_by(bin_uri) %>%
+  summarise(n())
+
+df_phoc_simple %>%
+  group_by(species) %>%
+  summarise(n())
+```
+
+Now determining the number of specimens in each BIN. When running this command I can see that BINs and species don't always match up. 
+
+```{r}
+df_phoc_simple %>%
+  group_by(bin_uri, species) %>%
+  summarise(count = n())
+```
+
+Some BINs and species don't match. When looking through the data, I realised that two of these instances were due to changes in naming conventions (Monachus schauinslandi became Neomonachus schauinslandi (NOAA Fisheries, 2020) and Phoca fasciata is also known as Histriophoca fasciata (Boveng et al., 2008). I renamed these to reflect the most modern/common naming convention. Please see my storyboard for full citations.
+
+There were also two instances where I assumed that a BIN contained a wrongly identified species, as all other species in that BIN were differently named, and a different BIN contained all other instances of the first species. I decided to remove these rows from the dataset for clarity/ease of analysis. 
+
+I made a new dataframe with this information.
+
+```{r}
+df_phoc_recode <- df_phoc_simple %>%
+  group_by(bin_uri, species) %>%
+  summarise(count = n())
+
+df_phoc_bincount <- df_phoc_recode %>%
+  ungroup() %>%
+  dplyr::slice(-c(1, 6)) %>% # removed row 1 (BOLD:AAD5778	Phoca largha	1) and row 6 (BOLD:AAE5172	Hydrurga leptonyx	1), assuming incorrect species name
+  mutate(species = case_when(
+    row_number() == 8 ~ "Neomonachus schauinslandi", row_number() == 15 ~ "Histriophoca fasciata",
+    TRUE ~ species
+  )) %>% # altered species names in these rows
+  group_by(bin_uri, species) %>%
+  summarise(across(count, sum)) %>% # collapsing the species
+  ungroup() %>%
+  mutate(species = case_when(
+    bin_uri == "no_bin" ~ "no_bin",
+    TRUE ~ species
+  )) %>% # added name "no_bin" for specimens with no BIN in the species column for labelling purposes
+  group_by(bin_uri, species) %>%
+  summarise(across(count, sum))
+
+head(df_phoc_bincount) # check how it looks
+```
+
+Now working with Red List data from IUCN. Selecting relevant columns only and renaming a column.
+
+```{r}
+df_iucn_simple <- df_iucn %>%
+  select(c(scientificName, redlistCategory)) %>%
+  dplyr::rename(species = scientificName)
+```
+
+Merging both dataframes for plotting and further analyses. Adding a column of abbreviated species name for graph labelling purposes.  
+
+```{r}
+df_merged <- merge(df_phoc_bincount, df_iucn_simple, all.x = T, all.y = T) # the dataframes have different numbers of rows, I deal with this below
+
+df_merged <- df_merged %>%
+  mutate(spec_abbrev = c("C. cristata", "E. barbarus", "H. grypus", "H. fasciata", "H. leptonyx", "L. weddellii", "L. carcinophaga", "M. angustirostris", "M. leonina", "M. monachus", "N. schauinslandi", "N. tropicalis", "No BIN", "O. rossii", "P. groenlandicus", "P. largha", "P. vitulina", "P. caspica", "P. hispida", "P. sibirica")) %>%
+  mutate(redlistCategory = replace_na(redlistCategory, "no_bin")) %>% # recoding NAs to say no_bin
+  dplyr::slice(-12) # removing the extinct species N tropicalis because it is not in BOLD
+```
+
+Plotting how many specimens are in each BIN and saving the figure as a .png.
+
+```{r}
+plot_count_bin <- ggplot(df_merged, aes(x = spec_abbrev, y = count, fill = spec_abbrev)) +
+  geom_col(stat = "identity") +
+  labs(x = "Species associated with BIN", y = "Number of specimens", title = "Number of specimens in each BIN in the Phocidae family") +
+  theme_grey() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = c("skyblue3", "skyblue3", "skyblue3", "skyblue3", "skyblue3", "skyblue3", "skyblue3", "skyblue3", "skyblue3", "skyblue3", "skyblue3", "navyblue", "skyblue3", "skyblue3", "skyblue3", "skyblue3", "skyblue3", "skyblue3", "skyblue3")) +
+  guides(fill = F)
+
+ggsave("../figs/count_bin_plot.png", plot = plot_count_bin, device = png)
+```
+
+Plotting counts of specimens per BIN, coloured by IUCN Red List category, and saving the plot as .png. I first removed the row with the count of specimens without BINs, as I don't need that information for this plot. 
+
+```{r}
+df_merged_nobin <- df_merged %>%
+  filter(spec_abbrev != "No BIN")
+
+plot_redlistcat <- ggplot(df_merged_nobin, aes(x = spec_abbrev, y = count, fill = redlistCategory)) +
+  geom_col() +
+  labs(x = "Species associated with BIN", y = "Number of specimens", title = "Number of specimens in each BIN in the Phocidae family", fill = "Red List Category") +
+  theme_grey() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = c("Endangered" = "navyblue", "Vulnerable" = "skyblue4", "Least Concern" = "paleturquoise3"))
+
+ggsave("../figs/redlist_bin_plot.png", plot = plot_redlistcat, device = png)
+```
+
+Running a one-way analysis of variance (ANOVA), to test for differences in count of specimens between Red List Categories Least Concern, Endangered, and Vulnerable. First I quickly visualised differences between groups with a boxplot. I saved the model output to the output folder.
+
+```{r}
+ggplot(df_merged_nobin, aes(redlistCategory, count)) +
+  geom_boxplot()
+
+anova <- aov(count ~ redlistCategory, data = df_merged_nobin)
+
+report(anova)
+
+summarybin <- summary(anova)
+
+summarybin
+
+capture.output(summarybin, file = "../output/anova_output.txt")
+```
