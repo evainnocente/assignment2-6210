@@ -4,6 +4,7 @@ author: "Eva Burguete-Innocente"
 date: "`r Sys.Date()`"
 output: html_document
 ---
+*Edits to this document were made by Farah Sadoon. Thanks to Fangyi Li and Lishita Rowjee for making minor suggestions about how to improve the data exploration and make the code for certain figures more dynamic.*
 
 The following code analyses data from Barcode of Life Database (BOLD) and International Union for Conservation of Nature (IUCN) in order to answer the question: Are endangered/vulnerable species in the Phocidae family well-represented in BOLD?  
 
