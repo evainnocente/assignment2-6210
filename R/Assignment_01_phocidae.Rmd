@@ -12,6 +12,15 @@ Load required packages.
 ```{r}
 library(tidyverse)
 library(report) # use this to visualise results of ANOVA
+
+#### fs_edit: installing and loading new packages to allow for edits below
+#install.packages("janitor")
+#install.packages("dendrometry")
+#install.packages("afex")
+#install.packages("performance")
+library(janitor)
+library(dendrometry)
+library(car)
 ```
 
 Load necessary data.
@@ -39,12 +48,16 @@ dim(df_iucn)
 Rows in the dataset (specimens) which have no BIN have blank spaces in the column. I added "no_bin" to these, and selected only relevant columns from the dataset for further analysis.
 
 ```{r}
+#### fs_edit: you could do a comparison of the count before and after to check if the number of replacements is the same rather than use the head() command. Fangyi Li pointed out that using the head() command does not directly address the question of whether the transformation worked successfully. 
+sum(df_phoc$bin_uri == "", na.rm = FALSE) # before
+
 df_phoc$bin_uri[df_phoc$bin_uri == ""] <- "no_bin"
 
 df_phoc_simple <- df_phoc %>%
   select(bin_uri, specimenid, species) # retain species column for graph labelling purposes
 
-head(df_phoc_simple) # check if it worked
+sum(df_phoc_simple$bin_uri == "no_bin", na.rm = FALSE) # after
+sum(df_phoc_simple$bin_uri == "", na.rm = FALSE) # check "" values after
 ```
 
 Determining how many unique BINs and species there are, and comparing them out of curiosity to see whether there are discrepancies. There are 18 BINs and 20 species.
@@ -96,6 +109,9 @@ df_phoc_bincount <- df_phoc_recode %>%
   summarise(across(count, sum))
 
 head(df_phoc_bincount) # check how it looks
+
+#### fs_edit: I would delete the previous versions of your dataframe to clear up your environment, provided they are no longer needed.
+rm(df_phoc, df_phoc_simple, df_phoc_recode)
 ```
 
 Now working with Red List data from IUCN. Selecting relevant columns only and renaming a column.
@@ -109,26 +125,55 @@ df_iucn_simple <- df_iucn %>%
 Merging both dataframes for plotting and further analyses. Adding a column of abbreviated species name for graph labelling purposes.  
 
 ```{r}
-df_merged <- merge(df_phoc_bincount, df_iucn_simple, all.x = T, all.y = T) # the dataframes have different numbers of rows, I deal with this below
+#### fs_edit: I would use dplyr left_join() instead of base R merge() here. Using a left join would retain all the values in df_phoc_bincount while retaining all the matching values you want, using species names as the join key. You would not have to manually address the records that do not appear in the BOLD data. It also prevents errors because you would not have to re-adjust these values later. You can use the clean_names() function in the janitor package to make sure the column names in both data frames are the same before doing the join. Joining with dplyr is generally more efficient. I would also use the spNmreduce() function in the dendrometry package to handle species names so that you don't have to do that manually in a list. This will avoid any errors that arise from hard-coding names.
+
+# make sure column names are formatted correctly before joining - this is important for the join where species is the join key
+clean_names(df_phoc_bincount)
+clean_names(df_iucn_simple)
+
+# join data frames
+df_merged <- left_join(df_phoc_bincount, df_iucn_simple, by = "species")
 
 df_merged <- df_merged %>%
-  mutate(spec_abbrev = c("C. cristata", "E. barbarus", "H. grypus", "H. fasciata", "H. leptonyx", "L. weddellii", "L. carcinophaga", "M. angustirostris", "M. leonina", "M. monachus", "N. schauinslandi", "N. tropicalis", "No BIN", "O. rossii", "P. groenlandicus", "P. largha", "P. vitulina", "P. caspica", "P. hispida", "P. sibirica")) %>%
-  mutate(redlistCategory = replace_na(redlistCategory, "no_bin")) %>% # recoding NAs to say no_bin
-  dplyr::slice(-12) # removing the extinct species N tropicalis because it is not in BOLD
+  mutate(redlistCategory = replace_na(redlistCategory, "no_bin"), 
+         spec_abbrev = case_when( # use case_when() to address when there are scientific names and when there is "no_bin"
+           redlistCategory == "no_bin" ~ "No BIN", # assign "No BIN" to those with no_bin category
+           TRUE ~ spNmReduce(species) # abbreviate scientific names
+           )
+         )
+
+#### fs_edit: inspect data frame after joining
+head(df_merged)
+tail(df_merged)
+dim(df_merged)
+
+#### fs_edit: remove df_phoc_bincount
+rm(df_phoc_bincount)
 ```
 
 Plotting how many specimens are in each BIN and saving the figure as a .png.
 
 ```{r}
-plot_count_bin <- ggplot(df_merged, aes(x = spec_abbrev, y = count, fill = spec_abbrev)) +
+#### fs_edit: rather than hard-coding all the bar colours, you could add a column to your data frame specifying the bar colour you want, then remove the column later. This might make your code more dynamic. Lishita R pointed out the hard-coded bar colours and suggested looking for ways to make this dynamic. 
+
+# add column for colour mapping in figure
+df_merged <- df_merged %>% 
+  mutate(bar_colour = ifelse(spec_abbrev == "No BIN", "navyblue", "skyblue3"))
+
+plot_count_bin <- ggplot(df_merged, aes(x = spec_abbrev, y = count, fill = bar_colour)) +
   geom_col(stat = "identity") +
   labs(x = "Species associated with BIN", y = "Number of specimens", title = "Number of specimens in each BIN in the Phocidae family") +
+  scale_fill_identity("navyblue", "skyblue3") + # tell ggplot() to use these colours for the bars
   theme_grey() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-  scale_fill_manual(values = c("skyblue3", "skyblue3", "skyblue3", "skyblue3", "skyblue3", "skyblue3", "skyblue3", "skyblue3", "skyblue3", "skyblue3", "skyblue3", "navyblue", "skyblue3", "skyblue3", "skyblue3", "skyblue3", "skyblue3", "skyblue3", "skyblue3")) +
-  guides(fill = F)
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+plot_count_bin
 
 ggsave("../figs/count_bin_plot.png", plot = plot_count_bin, device = png)
+
+# remove bar colour column as it is not needed after this
+df_merged <- df_merged %>% 
+  select(-"bar_colour")
 ```
 
 Plotting counts of specimens per BIN, coloured by IUCN Red List category, and saving the plot as .png. I first removed the row with the count of specimens without BINs, as I don't need that information for this plot. 
@@ -150,16 +195,38 @@ ggsave("../figs/redlist_bin_plot.png", plot = plot_redlistcat, device = png)
 Running a one-way analysis of variance (ANOVA), to test for differences in count of specimens between Red List Categories Least Concern, Endangered, and Vulnerable. First I quickly visualised differences between groups with a boxplot. I saved the model output to the output folder.
 
 ```{r}
+
+#### fs_edit: I think the ANOVA works here, however it can be tricky because it usually assumes continuous variable. I would check your assumptions to make sure the counts don't impact the other assumptions. We will assume that the observations are independent because you got them from BOLD, and we cannot adjust the independence of observations as that has to do with study design. If you knew the samples were not independent, you could use a test that works for repeated-measures, or remove the values that you know were repeated. No need to test for sphericity because we are assuming no repeated measures. Usually you want to remove outliers from your data before running your statistical test. You plotted a boxplot showing the distribution for each group in the analysis, which is a good way to visually assess that. Reference(s): https://mgimond.github.io/Stats-in-R/ANOVA.html, https://numiqo.com/tutorial/kruskal-wallis-test
+
+# test assumption: no outliers
 ggplot(df_merged_nobin, aes(redlistCategory, count)) +
-  geom_boxplot()
+  geom_boxplot() # there are some points that look far outside the range of the data - it may be worth investigating or removing those points
 
+# run the anova
 anova <- aov(count ~ redlistCategory, data = df_merged_nobin)
-
 report(anova)
 
-summarybin <- summary(anova)
+# test assumption: normality of residuals
+residuals_anova <- residuals(anova)
+shapiro.test(residuals_anova) # the residuals deviate significantly from what you would expect if they were normally distributed. 
 
+# visualize normality of residuals with a Q-Q plot
+ggplot(data.frame(residuals = residuals_anova), aes(sample = residuals)) +
+  stat_qq() + 
+  stat_qq_line(color = "red") +
+  theme_minimal() +
+  labs(title = "Q-Q Plot of ANOVA Residuals")
+
+# test assumption: homogeneity of variances (are the variances between your groups the same?)
+leveneTest(count ~ redlistCategory, data = df_merged_nobin) # seems that the variance does not deviate significantly from what would be expected if there was no difference
+
+# since normality of residuals is violated, use kruskal-wallis test instead of anova
+kruskal_test <- kruskal.test(count ~ redlistCategory, data = df_merged_nobin)
+kruskal_test
+
+summarybin <- summary(anova)
 summarybin
 
 capture.output(summarybin, file = "../output/anova_output.txt")
+capture.output(kruskal_test, file = "../output/kruskal_test.txt")
 ```
